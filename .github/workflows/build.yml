@@ -19,6 +19,8 @@ jobs:
           mkdir /tmp/proj
           unzip /tmp/a.zip -d /tmp/proj
           cd /tmp/proj/gta6-cardputer
+          sed -i 's/setRotation(1)/setRotation(3)/' src/main.cpp
+          grep -n setRotation src/main.cpp
           pio run -e cardputer-adv
           B=.pio/build/cardputer-adv
           BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
