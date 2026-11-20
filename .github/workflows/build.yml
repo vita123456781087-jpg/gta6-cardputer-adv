@@ -25,22 +25,24 @@ jobs:
           #include <WiFi.h>
           #include <math.h>
 
-          #define BUILD "v4"
+          #define BUILD "v5"
 
           static const int W = 240;
           static const int H = 135;
-          static const int HZ = 100;  // horizon
+          static const int HZ = 100;
 
           Preferences prefs;
           M5Canvas cv(&M5Cardputer.Display);
           int g_rot = 1;
+          uint32_t g_volShown = 0;
+          int g_prevVol = 90;
 
           struct Settings {
             String player = "Player";
             String ssid = "";
             String pass = "";
             int brightness = 160;
-            int volume = 120;
+            int volume = 90;
           } cfg;
 
           void loadSettings() {
@@ -49,7 +51,7 @@ jobs:
             cfg.ssid = prefs.getString("ssid", "");
             cfg.pass = prefs.getString("pass", "");
             cfg.brightness = prefs.getInt("bright", 160);
-            cfg.volume = prefs.getInt("vol", 120);
+            cfg.volume = prefs.getInt("vol", 90);
             prefs.end();
           }
 
@@ -159,8 +161,41 @@ jobs:
             }
           }
 
+          // ---------- volume keys: - quieter, = louder, m mute ----------
+          bool handleVolKey(const Key &k) {
+            if (k.c != '-' && k.c != '=' && k.c != 'm') return false;
+            if (k.c == '-') {
+              cfg.volume = cfg.volume - 15;
+              if (cfg.volume < 0) cfg.volume = 0;
+            } else if (k.c == '=') {
+              cfg.volume = cfg.volume + 15;
+              if (cfg.volume > 255) cfg.volume = 255;
+            } else {
+              if (cfg.volume > 0) { g_prevVol = cfg.volume; cfg.volume = 0; }
+              else cfg.volume = g_prevVol > 0 ? g_prevVol : 90;
+            }
+            M5Cardputer.Speaker.setVolume(cfg.volume);
+            if (cfg.volume > 0) M5Cardputer.Speaker.tone(1000, 40);
+            g_volShown = millis();
+            prefs.begin("gta6", false);
+            prefs.putInt("vol", cfg.volume);
+            prefs.end();
+            return true;
+          }
+
+          void drawVolHud() {
+            if (millis() - g_volShown > 1400) return;
+            cv.fillRoundRect(W - 80, 3, 76, 14, 3, TFT_BLACK);
+            cv.drawRoundRect(W - 80, 3, 76, 14, 3, TFT_WHITE);
+            cv.setTextSize(1);
+            cv.setTextDatum(middle_left);
+            cv.setTextColor(TFT_WHITE);
+            cv.drawString(cfg.volume > 0 ? "VOL" : "MUTE", W - 76, 10);
+            cv.drawRect(W - 46, 7, 38, 6, TFT_WHITE);
+            cv.fillRect(W - 46, 7, (int)(38 * cfg.volume / 255.0f), 6, col(255, 170, 60));
+          }
+
           // ---------- screen orientation ----------
-          // next rotation (0..3) where the screen is wider than tall
           int nextLandscape(int cur) {
             for (int i = 1; i <= 4; i++) {
               int r = (cur + i) % 4;
@@ -197,16 +232,16 @@ jobs:
             }
           }
 
-          // ---------- the scene ----------
-          void skyline(float off, int bw, int minH, int varH, uint16_t c, uint32_t seed, bool windows) {
+          // ---------- scene pieces ----------
+          void skyline(float off, int bw, int minH, int varH, uint16_t c, uint32_t seed, bool windows, int hz) {
             int first = (int)floorf(off / bw);
             for (int i = 0; i <= W / bw + 2; i++) {
               int idx = first + i;
               int x = idx * bw - (int)off;
               int h = minH + (int)(hsh(idx + seed * 977) % varH);
-              cv.fillRect(x, HZ - h, bw - 1, h, c);
+              cv.fillRect(x, hz - h, bw - 1, h, c);
               if (windows) {
-                for (int wy = HZ - h + 4; wy < HZ - 3; wy += 6)
+                for (int wy = hz - h + 4; wy < hz - 3; wy += 6)
                   for (int wx = x + 3; wx < x + bw - 4; wx += 5)
                     if (hsh(idx * 131 + wy * 17 + wx + seed) % 4 == 0) cv.fillRect(wx, wy, 2, 3, col(255, 200, 90));
               }
@@ -236,17 +271,32 @@ jobs:
             }
           }
 
-          void drawScene(float t, float logoK) {
+          void birds(float t, uint16_t c) {
+            for (int i = 0; i < 2; i++) {
+              int x = ((int)(t * 12) + i * 70) % (W + 40) - 20;
+              int y = 14 + i * 9 + (int)(2 * sinf(t * 3 + i));
+              int fl = (int)(2 * sinf(t * 9 + i * 2));
+              cv.drawLine(x - 3, y - fl, x, y + 2, c);
+              cv.drawLine(x, y + 2, x + 3, y - fl, c);
+            }
+          }
+
+          void stars(float t, int maxY) {
+            for (int i = 0; i < 36; i++) {
+              int x = hsh(i * 2 + 1) % W, y = hsh(i * 2 + 2) % maxY;
+              int b = 90 + (int)(80 * sinf(t * 2.0f + i));
+              cv.drawPixel(x, y, col(b, b, b + 30));
+            }
+          }
+
+          // scene 0: sunset city
+          void drawSunsetCity(float t, float logoK) {
             for (int y = 0; y < HZ; y++) {
               uint8_t r, g, b;
               sunset((float)y / HZ, r, g, b);
               cv.drawFastHLine(0, y, W, col(r, g, b));
             }
-            for (int i = 0; i < 36; i++) {
-              int x = hsh(i * 2 + 1) % W, y = hsh(i * 2 + 2) % 50;
-              int b = 90 + (int)(80 * sinf(t * 2.0f + i));
-              cv.drawPixel(x, y, col(b, b, b + 30));
-            }
+            stars(t, 50);
             for (int i = 0; i < 3; i++) {
               int x = ((int)(t * 4 * (i + 1)) + i * 90) % (W + 80) - 40;
               cv.fillRoundRect(x, 50 + i * 12, 40 + i * 12, 2, 1, col(255, 150, 190));
@@ -261,61 +311,161 @@ jobs:
               mix(255, 235, 120, 255, 70, 150, (dy + 30) / 60.0f, r, g, b);
               cv.drawFastHLine(cx - hw, y, 2 * hw, col(r, g, b));
             }
-            skyline(t * 3.0f, 12, 14, 22, col(110, 30, 120), 7, false);
-            skyline(t * 8.0f + 50, 18, 24, 34, col(40, 8, 70), 3, true);
+            skyline(t * 3.0f, 12, 14, 22, col(110, 30, 120), 7, false, HZ);
+            skyline(t * 8.0f + 50, 18, 24, 34, col(40, 8, 70), 3, true, HZ);
             cv.fillRect(0, HZ, W, H - HZ, col(25, 5, 50));
             for (int i = 0; i < 7; i++) {
               int w = (int)(44 - i * 5 + 5 * sinf(t * 3 + i));
               if (w > 0) cv.drawFastHLine(cx - w / 2, HZ + 2 + i * 4, w, col(255, 150 - i * 15, 100));
             }
-            for (int i = 0; i < 10; i++) {
-              int x = (hsh(i) % W + (int)(t * (6 + i % 3))) % W;
-              int y = HZ + 4 + hsh(i + 50) % (H - HZ - 6);
-              cv.drawFastHLine(x, y, 6 + i % 5, col(120, 40, 140));
-            }
             uint16_t pc = col(10, 2, 26);
             palm(24, H + 2, 78, 0.5f, t, pc);
             palm(W - 22, H + 2, 70, -0.45f, t + 1.3f, pc);
-            for (int i = 0; i < 2; i++) {
-              int x = ((int)(t * 12) + i * 70) % (W + 40) - 20;
-              int y = 14 + i * 9 + (int)(2 * sinf(t * 3 + i));
-              int fl = (int)(2 * sinf(t * 9 + i * 2));
-              cv.drawLine(x - 3, y - fl, x, y + 2, pc);
-              cv.drawLine(x, y + 2, x + 3, y - fl, pc);
-            }
+            birds(t, pc);
             if (logoK > 0) gradText("GTA VI", W / 2, 30, 4, logoK);
           }
 
-          // ---------- loading ----------
-          const char *bootTips[] = {"Warming up the neon...", "Tuning the radio...", "Polishing the sunset...",
-                                    "Counting palm trees...", "Almost home..."};
-          const char *playTips[] = {"Entering the city...", "Neon lights. Warm nights.", "Big dreams. Bigger sunsets.",
-                                    "Fueling the getaway car...", "Streaming the skyline...", "Don't blink."};
-          const char *stallTips[] = {"99%... any moment now", "Still 99%. Trust the process.", "Waiting for Trailer 3...",
-                                     "Almost there. Honest."};
+          // scene 1: night drive
+          void drawNight(float t, float logoK) {
+            const int hz = 64;
+            for (int y = 0; y < hz; y++) {
+              uint8_t r, g, b;
+              mix(6, 4, 40, 120, 30, 120, (float)y / hz, r, g, b);
+              cv.drawFastHLine(0, y, W, col(r, g, b));
+            }
+            stars(t, 40);
+            cv.fillCircle(196, 22, 12, col(70, 40, 110));
+            cv.fillCircle(196, 22, 9, col(250, 245, 215));
+            skyline(t * 4.0f, 12, 12, 18, col(55, 18, 85), 11, false, hz);
+            skyline(t * 10.0f + 30, 16, 18, 26, col(22, 8, 50), 5, true, hz);
+            cv.fillRect(0, hz, W, H - hz, col(14, 10, 30));
+            cv.fillRect(0, hz + 6, W, 36, col(32, 30, 52));
+            cv.drawFastHLine(0, hz + 6, W, col(255, 80, 170));
+            cv.drawFastHLine(0, hz + 41, W, col(80, 220, 255));
+            int off = (int)(t * 110) % 36;
+            for (int x = -36 + off; x < W; x += 36) cv.fillRect(x, hz + 23, 18, 2, col(230, 230, 190));
+            int off2 = (int)(t * 55) % 90;
+            for (int x = -90 + off2; x < W + 90; x += 90) {
+              cv.fillRect(x, hz - 12, 2, 18, col(70, 60, 100));
+              cv.fillCircle(x + 1, hz - 13, 9, col(60, 40, 40));
+              cv.fillCircle(x + 1, hz - 13, 4, col(255, 220, 130));
+            }
+            int cx = 96 + (int)(6 * sinf(t * 0.7f));
+            int cy = hz + 28;
+            int bob = (int)(sinf(t * 14.0f));
+            cv.fillTriangle(cx + 44, cy - 6 + bob, cx + 96, cy - 16 + bob, cx + 96, cy + 4 + bob, col(80, 72, 40));
+            cv.fillRoundRect(cx, cy - 9 + bob, 44, 10, 3, col(255, 60, 140));
+            cv.fillRoundRect(cx + 10, cy - 15 + bob, 22, 7, 3, col(200, 30, 110));
+            cv.fillRect(cx + 13, cy - 13 + bob, 7, 4, col(20, 40, 70));
+            cv.fillRect(cx + 22, cy - 13 + bob, 7, 4, col(20, 40, 70));
+            cv.fillRect(cx - 1, cy - 6 + bob, 2, 3, col(255, 40, 40));
+            cv.fillRect(cx + 43, cy - 6 + bob, 2, 3, col(255, 250, 180));
+            cv.fillCircle(cx + 9, cy + 2, 4, col(8, 8, 12));
+            cv.fillCircle(cx + 35, cy + 2, 4, col(8, 8, 12));
+            cv.fillCircle(cx + 9, cy + 2, 1, col(150, 150, 170));
+            cv.fillCircle(cx + 35, cy + 2, 1, col(150, 150, 170));
+            if (logoK > 0) gradText("GTA VI", W / 2, 30, 4, logoK);
+          }
 
-          void loadingScreen(uint32_t durMs, uint32_t stallMs, const char *const *tips, int nTips) {
-            const int notes[] = {392, 494, 587, 659, 587, 494, 440, 523};
-            uint32_t t0 = millis(), nextNote = t0, lastTip = t0;
-            int tip = 0, noteI = 0;
+          // scene 2: beach sunset
+          void drawBeach(float t, float logoK) {
+            const int hz = 62;
+            for (int y = 0; y < hz; y++) {
+              uint8_t r, g, b;
+              mix(60, 15, 110, 255, 150, 70, (float)y / hz, r, g, b);
+              cv.drawFastHLine(0, y, W, col(r, g, b));
+            }
+            for (int i = 0; i < 3; i++) {
+              int x = (((int)(t * 5 * (i + 1)) + i * 80) % (W + 70)) - 35;
+              cv.fillRoundRect(x, 16 + i * 14, 34 + i * 10, 3, 1, col(255, 170, 170));
+            }
+            int cx = W / 2;
+            int cy = hz + (int)(fmaxf(0.0f, 8.0f - t) * 2.0f);
+            for (int dy = -32; dy <= 0; dy++) {
+              int y = cy + dy;
+              if (y >= hz) break;
+              int hw = (int)sqrtf(1024.0f - dy * dy);
+              uint8_t r, g, b;
+              mix(255, 240, 130, 255, 90, 140, (dy + 32) / 32.0f, r, g, b);
+              cv.drawFastHLine(cx - hw, y, 2 * hw, col(r, g, b));
+            }
+            cv.fillTriangle(0, hz, 34, hz - 12, 80, hz, col(70, 20, 100));
+            cv.fillTriangle(150, hz, 190, hz - 8, 240, hz, col(70, 20, 100));
+            for (int y = hz; y < H; y++) {
+              uint8_t r, g, b;
+              mix(130, 40, 130, 15, 8, 55, (float)(y - hz) / (H - hz), r, g, b);
+              cv.drawFastHLine(0, y, W, col(r, g, b));
+            }
+            for (int y = hz + 1; y < 104; y += 3) {
+              int w = (int)(46 - (y - hz) * 0.7f + 7 * sinf(t * 3 + y));
+              if (w > 2) cv.drawFastHLine(cx - w / 2, y, w, col(255, 200, 110));
+            }
+            for (int i = 0; i < 14; i++) {
+              int y = hz + 4 + i * 3;
+              int dir = (i & 1) ? 1 : -1;
+              int x = (((int)(t * (6 + i % 4) * dir) + (int)(hsh(i) % W)) % W + W) % W;
+              cv.drawFastHLine(x, y, 8 + (i % 4) * 3, col(200, 120, 190));
+            }
+            uint16_t pc = col(10, 2, 26);
+            palm(W - 24, H + 2, 84, -0.45f, t, pc);
+            palm(18, H + 2, 70, 0.5f, t + 1.0f, pc);
+            birds(t, pc);
+            if (logoK > 0) gradText("GTA VI", W / 2, 30, 4, logoK);
+          }
+
+          void drawScene(int v, float t, float logoK) {
+            if (v == 1) drawNight(t, logoK);
+            else if (v == 2) drawBeach(t, logoK);
+            else drawSunsetCity(t, logoK);
+          }
+
+          void uiPanel() {
+            cv.fillRect(0, 104, W, 31, col(12, 4, 28));
+            cv.drawFastHLine(0, 104, W, col(250, 60, 150));
+          }
+
+          // ---------- loading ----------
+          const char *tips[] = {
+            "Warming up the neon...", "Tuning the radio...", "Polishing the sunset...",
+            "Counting palm trees...", "Neon lights. Warm nights.", "Big dreams. Bigger sunsets.",
+            "Fueling the getaway car...", "Streaming the skyline...", "Don't blink.",
+            "Teaching seagulls to behave...", "Parking the cars badly...", "Hiding the good stuff..."
+          };
+          const int NT = 12;
+          const char *stallTips[] = {"99%... any moment now", "Still 99%. Trust the process.",
+                                     "Waiting for Trailer 3...", "Almost there. Honest."};
+
+          void loadingScreen(uint32_t durMs, uint32_t stallMs, int baseVar) {
+            uint32_t t0 = millis(), lastTip = t0;
+            int tip = (baseVar * 4) % NT;
             M5Cardputer.Display.setBrightness(0);
             while (true) {
               uint32_t now = millis();
               uint32_t ms = now - t0;
-              float el = ms / 1000.0f;
               if (ms >= durMs + stallMs) break;
+              float el = ms / 1000.0f;
+              int var = (baseVar + (int)(ms / 8000)) % 3;
+              uint32_t ph = ms % 8000;
+              float sk = 1.0f;
+              if (ph < 400) sk = ph / 400.0f;
+              else if (ph > 7600) sk = (8000 - ph) / 400.0f;
+              float fk = el / 1.2f;
+              if (fk > 1) fk = 1;
+              float k = fk < sk ? fk : sk;
+              M5Cardputer.Display.setBrightness((int)(cfg.brightness * k));
+
+              float lk = ph / 2000.0f;
+              if (lk > 1) lk = 1;
+              drawScene(var, el + var * 7, lk);
+              uiPanel();
+
               float u = ms >= durMs ? 1.0f : (float)ms / durMs;
               float s = u * u * (3 - 2 * u);
               bool stall = ms >= durMs && stallMs > 0;
               float p = s * (stallMs > 0 ? 99.0f : 100.0f);
-              float fk = el / 1.5f;
-              if (fk > 1) fk = 1;
-              M5Cardputer.Display.setBrightness((int)(cfg.brightness * fk));
-
-              drawScene(el, el / 2.5f > 1 ? 1 : el / 2.5f);
 
               uint32_t ti = now - lastTip;
-              if (ti > 2800) { tip = (tip + 1) % nTips; lastTip = now; ti = 0; }
+              if (ti > 2800) { tip = (tip + 1) % NT; lastTip = now; ti = 0; }
               float a = ti / 500.0f;
               if (a > 1) a = 1;
               float b2 = (2800 - (float)ti) / 500.0f;
@@ -326,7 +476,7 @@ jobs:
               cv.setTextSize(1);
               cv.setTextDatum(middle_center);
               cv.setTextColor(col(255 * a, 230 * a, 200 * a));
-              cv.drawString(msg, W / 2, 110);
+              cv.drawString(msg, W / 2, 113);
 
               cv.drawRoundRect(20, 121, 170, 8, 4, col(255, 255, 255));
               int fw = (int)(166 * p / 100.0f);
@@ -337,28 +487,27 @@ jobs:
               cv.setTextDatum(middle_left);
               cv.setTextColor(TFT_WHITE);
               cv.drawString(buf, 196, 125);
+              drawVolHud();
               cv.pushSprite(0, 0);
 
-              if (now >= nextNote) {
-                M5Cardputer.Speaker.tone(notes[noteI++ % 8], 260);
-                nextNote += 520;
+              Key kk;
+              if (pollKey(kk)) {
+                if (kk.esc) break;
+                handleVolKey(kk);
               }
-              Key k;
-              if (pollKey(k) && k.esc) break;
             }
           }
 
           void finale() {
-            const int ch[] = {523, 659, 784, 1046};
-            for (int i = 0; i < 4; i++) {
-              M5Cardputer.Speaker.tone(ch[i], 220);
-              delay(150);
-            }
+            M5Cardputer.Speaker.tone(784, 120);
+            delay(140);
+            M5Cardputer.Speaker.tone(1046, 220);
             M5Cardputer.Display.setBrightness(255);
             delay(140);
-            fadeBrightness(255, cfg.brightness, 600);
+            fadeBrightness(255, 0, 500);
           }
 
+          // ---------- intro ----------
           void rockstarSplash() {
             cv.fillSprite(TFT_BLACK);
             cv.setTextDatum(middle_center);
@@ -373,9 +522,109 @@ jobs:
             cv.drawString(BUILD, 4, 4);
             M5Cardputer.Display.setBrightness(0);
             cv.pushSprite(0, 0);
-            fadeBrightness(0, cfg.brightness, 2000);
-            delay(1400);
-            fadeBrightness(cfg.brightness, 0, 1500);
+            fadeBrightness(0, cfg.brightness, 1800);
+            delay(1200);
+            fadeBrightness(cfg.brightness, 0, 1200);
+          }
+
+          void bars() {
+            cv.fillRect(0, 0, W, 16, TFT_BLACK);
+            cv.fillRect(0, H - 18, W, 18, TFT_BLACK);
+          }
+
+          // returns false if skipped
+          bool playScene(int v, const char *cap, uint32_t ms, float toff) {
+            uint32_t t0 = millis();
+            while (true) {
+              uint32_t e = millis() - t0;
+              if (e >= ms) break;
+              float t = toff + e / 1000.0f;
+              float k = 1.0f;
+              if (e < 700) k = e / 700.0f;
+              else if (e > ms - 700) k = (ms - e) / 700.0f;
+              M5Cardputer.Display.setBrightness((int)(cfg.brightness * k));
+              drawScene(v, t, 0);
+              bars();
+              cv.setTextSize(1);
+              cv.setTextDatum(middle_center);
+              cv.setTextColor(col(235 * k, 220 * k, 200 * k));
+              cv.drawString(cap, W / 2, H - 9);
+              cv.setTextDatum(top_left);
+              cv.setTextColor(col(90, 90, 90));
+              cv.drawString("` skip   -/= volume", 3, 4);
+              drawVolHud();
+              cv.pushSprite(0, 0);
+              Key kk;
+              if (pollKey(kk)) {
+                if (kk.esc || kk.enter) return false;
+                handleVolKey(kk);
+              }
+            }
+            return true;
+          }
+
+          void titleCard() {
+            M5Cardputer.Display.setBrightness(255);
+            cv.fillSprite(TFT_WHITE);
+            cv.pushSprite(0, 0);
+            M5Cardputer.Speaker.tone(110, 250);
+            delay(120);
+            M5Cardputer.Display.setBrightness(cfg.brightness);
+            uint32_t t0 = millis();
+            bool swept = false;
+            while (true) {
+              uint32_t e = millis() - t0;
+              if (e >= 6000) break;
+              float t = e / 1000.0f;
+              drawScene(2, 6 + t, 0);
+              float lk = (t - 0.6f) / 1.6f;
+              if (lk < 0) lk = 0;
+              if (lk > 1) lk = 1;
+              if (lk > 0) gradText("GTA VI", W / 2, 56, 5, lk);
+              cv.setTextSize(1);
+              cv.setTextDatum(middle_center);
+              if (t > 2.4f) {
+                float a = t - 2.4f;
+                if (a > 1) a = 1;
+                cv.setTextColor(col(255 * a, 230 * a, 200 * a));
+                cv.drawString("COMING SOON", W / 2, 86);
+              }
+              if (t > 3.6f) {
+                float a = t - 3.6f;
+                if (a > 1) a = 1;
+                cv.setTextColor(col(190 * a, 150 * a, 200 * a));
+                cv.drawString("(allegedly)", W / 2, 98);
+              }
+              bars();
+              if (t > 5.2f) {
+                float k = (6.0f - t) / 0.8f;
+                if (k < 0) k = 0;
+                M5Cardputer.Display.setBrightness((int)(cfg.brightness * k));
+              }
+              drawVolHud();
+              cv.pushSprite(0, 0);
+              if (!swept && t > 0.6f) {
+                swept = true;
+                for (int f = 200; f <= 900; f += 60) {
+                  M5Cardputer.Speaker.tone(f, 25);
+                  delay(20);
+                }
+              }
+              Key kk;
+              if (pollKey(kk)) {
+                if (kk.esc || kk.enter) break;
+                handleVolKey(kk);
+              }
+            }
+            M5Cardputer.Display.setBrightness(0);
+          }
+
+          void introCinematic() {
+            M5Cardputer.Display.setBrightness(0);
+            if (!playScene(2, "Sun. Salt. Trouble.", 4200, 0)) { M5Cardputer.Display.setBrightness(0); return; }
+            if (!playScene(1, "The night has its own rules.", 4200, 0)) { M5Cardputer.Display.setBrightness(0); return; }
+            if (!playScene(0, "Dream big. Stay out of trouble.", 4200, 6)) { M5Cardputer.Display.setBrightness(0); return; }
+            titleCard();
           }
 
           // ---------- setup wizard ----------
@@ -496,29 +745,36 @@ jobs:
           }
 
           // ---------- home ----------
-          void homeScreen() {
+          void homeScreen(int homeVar) {
             uint32_t t0 = millis();
             M5Cardputer.Display.setBrightness(0);
             bool first = true;
             while (true) {
               float el = (millis() - t0) / 1000.0f;
-              drawScene(el + 20, 1.0f);
+              drawScene(homeVar, el + 20, 1.0f);
+              uiPanel();
               cv.setTextSize(1);
               cv.setTextDatum(middle_center);
               cv.setTextColor(TFT_WHITE);
               String hello = "Hello, " + cfg.player + "   " + BUILD;
-              cv.drawString(hello, W / 2, 112);
+              cv.drawString(hello, W / 2, 113);
               cv.setTextColor(col(255, 200, 120));
-              cv.drawString("ENTER play   ` setup   R rotate", W / 2, 126);
+              cv.drawString("ENTER play  ` setup  R rotate  -/= vol", W / 2, 126);
+              drawVolHud();
               cv.pushSprite(0, 0);
               if (first) { fadeBrightness(0, cfg.brightness, 800); first = false; }
 
               Key k;
               if (pollKey(k)) {
-                if (k.enter) {
+                if (handleVolKey(k)) {
+                } else if (k.enter) {
                   fadeBrightness(cfg.brightness, 0, 600);
-                  loadingScreen(20000, 6000, playTips, 6);
-                  fadeBrightness(cfg.brightness, 0, 600);
+                  prefs.begin("gta6", false);
+                  int plc = prefs.getInt("plc", 0);
+                  prefs.putInt("plc", plc + 1);
+                  prefs.end();
+                  loadingScreen(20000, 6000, plc % 3);
+                  fadeBrightness(cfg.brightness, 0, 400);
                   cv.fillSprite(TFT_BLACK);
                   cv.setTextDatum(middle_center);
                   cv.setTextSize(2);
@@ -529,7 +785,7 @@ jobs:
                   cv.drawString("Wait for the real GTA VI", W / 2, H / 2 + 6);
                   cv.drawString("Try again later", W / 2, H / 2 + 20);
                   cv.pushSprite(0, 0);
-                  M5Cardputer.Speaker.tone(220, 400);
+                  M5Cardputer.Speaker.tone(220, 300);
                   fadeBrightness(0, cfg.brightness, 600);
                   delay(2500);
                   fadeBrightness(cfg.brightness, 0, 600);
@@ -549,6 +805,8 @@ jobs:
             }
           }
 
+          int g_homeVar = 0;
+
           void setup() {
             auto c = M5.config();
             M5Cardputer.begin(c, true);
@@ -559,6 +817,7 @@ jobs:
             prefs.begin("gta6", true);
             g_rot = prefs.getInt("rot", 1);
             bool rotOk = prefs.getBool("rotok", false);
+            g_homeVar = prefs.getInt("plc", 0) % 3;
             prefs.end();
 
             M5Cardputer.Display.setRotation(g_rot);
@@ -569,15 +828,16 @@ jobs:
             }
 
             rockstarSplash();
-            loadingScreen(9000, 0, bootTips, 5);
-            finale();
+            introCinematic();
+            applyHw();
+            waitRelease();
             if (!setupDone()) setupWizard();
             else connectWifi();
           }
 
-          void loop() { homeScreen(); }
+          void loop() { homeScreen(g_homeVar); }
           EOF
-          grep -c orientationScreen src/main.cpp
+          grep -c introCinematic src/main.cpp
           pio run -e cardputer-adv
           B=.pio/build/cardputer-adv
           BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
