@@ -10,7 +10,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install platformio
+      - run: pip install platformio esptool
       - name: Unzip, build, merge
         run: |
           f=$(find . -maxdepth 1 -type f -iname 'gta6-cardputer*' | head -n1)
