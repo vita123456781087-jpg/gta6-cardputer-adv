@@ -25,12 +25,15 @@ jobs:
           #include <WiFi.h>
           #include <math.h>
 
+          #define BUILD "v4"
+
           static const int W = 240;
           static const int H = 135;
           static const int HZ = 100;  // horizon
 
           Preferences prefs;
           M5Canvas cv(&M5Cardputer.Display);
+          int g_rot = 1;
 
           struct Settings {
             String player = "Player";
@@ -58,6 +61,13 @@ jobs:
             prefs.putInt("bright", cfg.brightness);
             prefs.putInt("vol", cfg.volume);
             prefs.putBool("setup", true);
+            prefs.end();
+          }
+
+          void saveRot(int r) {
+            prefs.begin("gta6", false);
+            prefs.putInt("rot", r);
+            prefs.putBool("rotok", true);
             prefs.end();
           }
 
@@ -146,6 +156,44 @@ jobs:
             while (M5Cardputer.Keyboard.isPressed() && millis() - t < 800) {
               M5Cardputer.update();
               delay(10);
+            }
+          }
+
+          // ---------- screen orientation ----------
+          // next rotation (0..3) where the screen is wider than tall
+          int nextLandscape(int cur) {
+            for (int i = 1; i <= 4; i++) {
+              int r = (cur + i) % 4;
+              M5Cardputer.Display.setRotation(r);
+              if (M5Cardputer.Display.width() > M5Cardputer.Display.height()) return r;
+            }
+            M5Cardputer.Display.setRotation(cur);
+            return cur;
+          }
+
+          void orientationScreen(int &rot) {
+            while (true) {
+              M5Cardputer.Display.setRotation(rot);
+              cv.fillSprite(col(20, 8, 40));
+              cv.fillTriangle(W / 2, 6, W / 2 - 18, 32, W / 2 + 18, 32, col(255, 150, 50));
+              cv.fillRect(W / 2 - 7, 32, 14, 16, col(255, 150, 50));
+              cv.setTextDatum(top_center);
+              cv.setTextSize(1);
+              cv.setTextColor(TFT_WHITE);
+              cv.drawString("THIS IS THE TOP OF THE SCREEN", W / 2, 58);
+              cv.setTextSize(2);
+              cv.drawString("Is it upright?", W / 2, 76);
+              cv.setTextSize(1);
+              cv.setTextColor(col(255, 200, 120));
+              cv.drawString("ENTER = yes", W / 2, 106);
+              cv.drawString("any other key = rotate", W / 2, 118);
+              cv.drawString(BUILD, 14, 124);
+              cv.pushSprite(0, 0);
+              waitRelease();
+              Key k;
+              while (!pollKey(k)) delay(10);
+              if (k.enter) break;
+              rot = nextLandscape(rot);
             }
           }
 
@@ -320,6 +368,9 @@ jobs:
             cv.setTextSize(1);
             cv.setTextColor(col(180, 180, 180));
             cv.drawString("presents", W / 2, H / 2 + 14);
+            cv.setTextDatum(top_left);
+            cv.setTextColor(col(120, 120, 120));
+            cv.drawString(BUILD, 4, 4);
             M5Cardputer.Display.setBrightness(0);
             cv.pushSprite(0, 0);
             fadeBrightness(0, cfg.brightness, 2000);
@@ -455,10 +506,10 @@ jobs:
               cv.setTextSize(1);
               cv.setTextDatum(middle_center);
               cv.setTextColor(TFT_WHITE);
-              String hello = "Hello, " + cfg.player;
+              String hello = "Hello, " + cfg.player + "   " + BUILD;
               cv.drawString(hello, W / 2, 112);
               cv.setTextColor(col(255, 200, 120));
-              cv.drawString("ENTER = play     ` = setup", W / 2, 126);
+              cv.drawString("ENTER play   ` setup   R rotate", W / 2, 126);
               cv.pushSprite(0, 0);
               if (first) { fadeBrightness(0, cfg.brightness, 800); first = false; }
 
@@ -489,6 +540,9 @@ jobs:
                   t0 = millis();
                   M5Cardputer.Display.setBrightness(0);
                   first = true;
+                } else if (k.c == 'r' || k.c == 'R') {
+                  g_rot = nextLandscape(g_rot);
+                  saveRot(g_rot);
                 }
               }
               delay(5);
@@ -498,11 +552,22 @@ jobs:
           void setup() {
             auto c = M5.config();
             M5Cardputer.begin(c, true);
-            M5Cardputer.Display.setRotation(3);
-            if (M5Cardputer.Display.width() < M5Cardputer.Display.height()) M5Cardputer.Display.setRotation(1);
             cv.createSprite(W, H);
             loadSettings();
             applyHw();
+
+            prefs.begin("gta6", true);
+            g_rot = prefs.getInt("rot", 1);
+            bool rotOk = prefs.getBool("rotok", false);
+            prefs.end();
+
+            M5Cardputer.Display.setRotation(g_rot);
+            if (M5Cardputer.Display.width() < M5Cardputer.Display.height()) g_rot = nextLandscape(g_rot);
+            if (!rotOk) {
+              orientationScreen(g_rot);
+              saveRot(g_rot);
+            }
+
             rockstarSplash();
             loadingScreen(9000, 0, bootTips, 5);
             finale();
@@ -512,7 +577,7 @@ jobs:
 
           void loop() { homeScreen(); }
           EOF
-          grep -c loadingScreen src/main.cpp
+          grep -c orientationScreen src/main.cpp
           pio run -e cardputer-adv
           B=.pio/build/cardputer-adv
           BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
