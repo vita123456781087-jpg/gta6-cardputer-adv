@@ -5,18 +5,21 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: gta6-cardputer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install platformio
-      - run: pio run -e cardputer-adv
-      - name: Merge into single flashable bin
+      - name: Unzip, build, merge
         run: |
+          f=$(find . -maxdepth 1 -type f -iname 'gta6-cardputer*' | head -n1)
+          echo "Found archive: $f"
+          cp "$f" /tmp/a.zip
+          mkdir /tmp/proj
+          unzip /tmp/a.zip -d /tmp/proj
+          cd /tmp/proj/gta6-cardputer
+          pio run -e cardputer-adv
           B=.pio/build/cardputer-adv
           BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
           python -m esptool --chip esp32s3 merge_bin -o GTA_VI.bin \
@@ -25,4 +28,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: GTA_VI
-          path: gta6-cardputer/GTA_VI.bin
+          path: /tmp/proj/gta6-cardputer/GTA_VI.bin
