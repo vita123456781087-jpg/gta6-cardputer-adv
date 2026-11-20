@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install platformio esptool
-      - name: Unzip, build, merge
+      - name: Unzip, patch, build, merge
         run: |
           f=$(find . -maxdepth 1 -type f -iname 'gta6-cardputer*' | head -n1)
           echo "Found archive: $f"
@@ -19,8 +19,44 @@ jobs:
           mkdir /tmp/proj
           unzip /tmp/a.zip -d /tmp/proj
           cd /tmp/proj/gta6-cardputer
-          sed -i 's/setRotation(1)/setRotation(3)/' src/main.cpp
-          grep -n setRotation src/main.cpp
+          python3 - << 'PY'
+          p = 'src/main.cpp'
+          s = open(p).read()
+          splash = '''void introSplash() {
+            auto &d = M5Cardputer.Display;
+            for (int k = 0; k <= 20; k++) {
+              cv.fillSprite(TFT_BLACK);
+              cv.setTextDatum(middle_center);
+              cv.setTextSize(2);
+              cv.setTextColor(d.color565(k * 12, k * 12, k * 12));
+              cv.drawString("ROCKSTAR GAMES", W / 2, H / 2 - 8);
+              cv.setTextSize(1);
+              cv.drawString("presents", W / 2, H / 2 + 14);
+              cv.pushSprite(0, 0);
+              delay(40);
+            }
+            delay(1200);
+            for (int k = 20; k >= 0; k--) {
+              cv.fillSprite(TFT_BLACK);
+              cv.setTextDatum(middle_center);
+              cv.setTextSize(2);
+              cv.setTextColor(d.color565(k * 12, k * 12, k * 12));
+              cv.drawString("ROCKSTAR GAMES", W / 2, H / 2 - 8);
+              cv.setTextSize(1);
+              cv.drawString("presents", W / 2, H / 2 + 14);
+              cv.pushSprite(0, 0);
+              delay(30);
+            }
+          }
+
+          '''
+          rot = 'M5Cardputer.Display.setRotation(1); for (int r = 2; r < 5 && M5Cardputer.Display.width() < M5Cardputer.Display.height(); r++) M5Cardputer.Display.setRotation(r % 4);'
+          s = s.replace('M5Cardputer.Display.setRotation(1);', rot, 1)
+          s = s.replace('void setup() {', splash + 'void setup() {', 1)
+          s = s.replace('  bootAnimation();\n  if (!setupDone())', '  introSplash();\n  bootAnimation();\n  if (!setupDone())', 1)
+          open(p, 'w').write(s)
+          PY
+          grep -n "introSplash\|setRotation" src/main.cpp
           pio run -e cardputer-adv
           B=.pio/build/cardputer-adv
           BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
